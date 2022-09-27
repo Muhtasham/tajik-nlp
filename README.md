@@ -1,2 +1,2 @@
 # tajik-nlp
-Collection of NLP projects in Tajik Language
+Collection of [NLP](https://huggingface.co/muhtasham) projects in Tajik Language
