@@ -1,2 +1,6 @@
 # tajik-nlp
-Collection of [NLP](https://huggingface.co/muhtasham) projects in Tajik Language
+
+Salom dunyo! 
+
+Here is the collection of [NLP](https://huggingface.co/muhtasham) projects in Tajik Language! 
+Feel free to contribute!
