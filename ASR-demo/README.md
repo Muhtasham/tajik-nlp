@@ -1,3 +1,5 @@
+[Live Demo](https://huggingface.co/spaces/muhtasham/tajik-asr)
+
 ---
 title: Tajik Asr
 emoji: 🇹🇯
@@ -11,3 +13,4 @@ license: mit
 ---
 
 Check out the configuration reference at https://huggingface.co/docs/hub/spaces-config-reference
+
