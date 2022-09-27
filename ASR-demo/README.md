@@ -1,5 +1,3 @@
-[Live Demo](https://huggingface.co/spaces/muhtasham/tajik-asr)
-
 ---
 title: Tajik Asr
 emoji: 🇹🇯
@@ -11,6 +9,8 @@ app_file: app.py
 pinned: false
 license: mit
 ---
+
+[Live Demo](https://huggingface.co/spaces/muhtasham/tajik-asr)
 
 Check out the configuration reference at https://huggingface.co/docs/hub/spaces-config-reference
 
