@@ -7,6 +7,10 @@ from unsloth import is_bfloat16_supported
 from trl import GRPOConfig, GRPOTrainer
 from vllm import SamplingParams
 from loguru import logger
+from dotenv import load_dotenv
+load_dotenv()
+
+HF_TOKEN = "load here"
 
 PatchFastRL("GRPO", FastLanguageModel)
 
