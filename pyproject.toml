@@ -1,0 +1,17 @@
+[project]
+name = "tajik-nlp"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "datasets>=3.2.0",
+    "fastparquet>=2024.11.0",
+    "huggingface-hub>=0.28.1",
+    "loguru>=0.7.3",
+    "openai>=1.61.1",
+    "pandas>=2.2.3",
+    "pyarrow>=19.0.0",
+    "python-dotenv>=1.0.1",
+    "rich>=13.9.4",
+]
