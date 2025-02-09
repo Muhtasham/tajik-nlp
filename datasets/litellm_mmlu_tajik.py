@@ -15,15 +15,6 @@ MMLU Dataset Translation Script
 This script loads a dataset from the MMLU evaluation suite, translates each question-choices
 pair into Persian and Tajik using a language model, and pushes the resulting dataset to the
 Hugging Face Hub.
-
-Dependencies:
-    - datasets>=3.2.0
-    - diskcache>=5.6.3
-    - fastparquet>=2024.11.0
-    - huggingface-hub>=0.28.1
-    - litellm>=1.60.8
-    - openinference-instrumentation-litellm
-    - arize-phoenix-otel
 """
 
 import os
@@ -45,11 +36,12 @@ random.seed(42)
 # ------------------------------
 
 # Initialize disk-based caching to avoid redundant API calls.
-Cache(type="disk")
+litellm.cache = Cache(type="disk")
 
 # Configure logging to track the progress and issues during translation.
+os.makedirs("logs", exist_ok=True)
 logging.basicConfig(
-    filename="translation_progress.log",
+    filename="logs/mmlu_tajik_translation_progress.log",
     filemode="a",  # Append mode
     format="%(asctime)s - %(levelname)s - %(message)s",
     level=logging.INFO,
@@ -57,21 +49,45 @@ logging.basicConfig(
 logger = logging.getLogger()
 
 # Reduce verbosity of logs from the LiteLLM package.
-logging.getLogger("LiteLLM").setLevel(logging.CRITICAL)
-
-# Disable logging of raw requests and responses from LiteLLM.
-litellm.log_raw_request_response = False
+logging.getLogger("LiteLLM").setLevel(logging.INFO)
 
 # ------------------------------
 # Constants and Environment Variables
 # ------------------------------
 
+SOURCE_MMLU_REPO_ID = "cais/mmlu"
+TARGET_REPO_ID = "tajik-evals/MMLU-dev"
 BATCH_SIZE = 20  # Batch size for processing dataset items.
 # Check if LLM_TRACING is enabled via environment variable.
 LLM_TRACING = os.getenv("LLM_TRACING", "false").lower() == "true"
 # Ensure OPENROUTER_API_KEY environment variable is set
 assert os.environ.get("OPENROUTER_API_KEY"), "OPENROUTER_API_KEY environment variable is not set"
 
+# ------------------------------
+# Patch LiteLLM for gemini-2.0-flash model
+# ------------------------------
+# Disable logging of raw requests and responses from LiteLLM.
+litellm.log_raw_request_response = False
+litellm.disable_end_user_cost_tracking = True
+litellm.model_cost.update(
+    {
+        "openrouter/google/gemini-2.0-flash-001": {
+            "max_tokens": 8192,
+            "max_input_tokens": 2000000,
+            "max_output_tokens": 8192,
+            "input_cost_per_token": 0.10 / 1000000,
+            "output_cost_per_token": 0.40 / 1000000,
+            # "input_cost_per_image": 0.0,
+            "litellm_provider": "openrouter",
+            "mode": "chat",
+            "supports_function_calling": True,
+            "supports_vision": True,
+            "supports_tool_choice": True,
+        },
+    }
+)
+litellm.model_list.append("google/gemini-2.0-flash-001")
+litellm.openrouter_models.append("google/gemini-2.0-flash-001")
 
 # ------------------------------
 # Optional: LLM Tracing Setup
@@ -277,6 +293,7 @@ def translate_dataset(dataset: Dataset) -> List[dict]:
                 messages=batch_messages,
                 temperature=0,
                 max_tokens=max_tokens,
+                provider="openrouter",
             )
         except Exception as e:
             logger.warning(f"Batch {batch_index + 1} failed with error: {e}")
@@ -311,10 +328,18 @@ def estimate_tokens(dataset_dict: DatasetDict) -> None:
     logger.info("Dataset splits and token estimation:")
     for split, ds in dataset_dict.items():
         input_chars = sum(len(item["question"] + "\n".join(item["choices"])) for item in ds)
-        approx_input_tokens = input_chars * 4  # Rough estimate: 4 tokens per character
+        approx_input_tokens = input_chars / 4  # Assuming 4 tokens per character
         approx_output_tokens = approx_input_tokens * 3
-        logger.info(
-            f"{split:16s}: {input_chars:14,} chars, {approx_input_tokens:14,} tokens, {approx_output_tokens:14,} output tokens"
+
+        approx_input_cost = approx_input_tokens * 0.10 / 1000_000  # $0.10/million tokens
+        approx_output_cost = approx_output_tokens * 0.40 / 1000_000  # $0.40/million tokens
+        estimated_cost = approx_input_cost + approx_output_cost
+        print(
+            f"{split:16s}: "
+            f"{input_chars:12,} chars, "
+            f"{approx_input_tokens:12,} tokens, "
+            f"{approx_output_tokens:12,} output tokens, "
+            f"{estimated_cost:5.2f} USD (Gemini 2.0 Flash)"
         )
 
 
@@ -341,7 +366,7 @@ def main(limit: Optional[int] = None, splits: Optional[List[str]] = None) -> Non
     # Load each specified split of the dataset.
     for split in splits:
         logger.info(f"Loading {split} split...")
-        dataset_dict[split] = load_dataset("cais/mmlu", "all", split=split)
+        dataset_dict[split] = load_dataset(SOURCE_MMLU_REPO_ID, "all", split=split)
 
     # Estimate tokens for the loaded dataset splits.
     estimate_tokens(dataset_dict)
@@ -373,7 +398,7 @@ def main(limit: Optional[int] = None, splits: Optional[List[str]] = None) -> Non
     logger.info("Pushing translated dataset to Hugging Face Hub...")
     try:
         dataset_dict.push_to_hub(
-            "tajik-evals/MMLU-dev",
+            TARGET_REPO_ID,
             commit_message="Translate to Tajik.",
         )
         logger.info("Dataset successfully pushed to Hugging Face Hub.")
