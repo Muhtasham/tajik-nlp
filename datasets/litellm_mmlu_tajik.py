@@ -122,7 +122,7 @@ Translate this question-choices pair into Persian and Tajik.{subject_details}
 Follow these rules when translating choices (for Tajik):
   - True -> Дуруст
   - False -> Нодуруст
-  - Wrong -> Нодурусе
+  - Wrong -> Нодуруст
   - Not Wrong -> Дуруст
   - Correct -> Дуруст
   - Incorrect -> Нодуруст
