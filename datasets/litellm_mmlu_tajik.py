@@ -521,11 +521,11 @@ def main(limit: Optional[int] = None, splits: Optional[List[str]] = None) -> Non
     # Push to Hugging Face Hub
     # ------------------------------
     commit_message = (
-        f"Merge translation results. Splits: {splits}, Total items processed: {global_stats.total_items}. "
-        f"Replaced: {global_stats.replaced}, Appended: {global_stats.appended}, Kept unchanged: {global_stats.kept}. "
-        f"Successes: {global_stats.successes}, Failures: {global_stats.failures}, "
-        f"Empty responses: {global_stats.empty_responses}, Parse errors: {global_stats.parse_errors}, "
-        f"Choice mismatches: {global_stats.choice_mismatches}, Total batches: {global_stats.total_batches}, "
+        f"Merge translation results. Splits: {splits}, Total items processed: {global_stats.total_items}. \n"
+        f"Replaced: {global_stats.replaced}, Appended: {global_stats.appended}, Kept unchanged: {global_stats.kept}. \n"
+        f"Successes: {global_stats.successes}, Failures: {global_stats.failures}, \n"
+        f"Empty responses: {global_stats.empty_responses}, Parse errors: {global_stats.parse_errors}, \n"
+        f"Choice mismatches: {global_stats.choice_mismatches}, Total batches: {global_stats.total_batches}, \n"
         f"Failed batches: {global_stats.failed_batches}"
     )
 
