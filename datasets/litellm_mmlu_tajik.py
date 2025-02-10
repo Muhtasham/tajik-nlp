@@ -13,17 +13,18 @@
 MMLU Dataset Translation Script
 
 This script loads a dataset from the MMLU evaluation suite, translates each question-choices
-pair into Persian and Tajik using a language model, and pushes the resulting dataset to the
-Hugging Face Hub.
+pair into Tajik using a language model, and merges the translations with an existing dataset
+if one exists. The resulting dataset is then pushed to the Hugging Face Hub.
 """
 
+import copy
 import logging
 import os
 import random
 import re
 from typing import Any, Dict, List, Optional, Tuple
 
-from datasets import Dataset, DatasetDict, load_dataset
+from datasets import Dataset, DatasetDict, concatenate_datasets, load_dataset
 import litellm
 from litellm import batch_completion
 from litellm.caching.caching import Cache
@@ -36,8 +37,20 @@ from tqdm import tqdm
 # Set a fixed random seed for reproducibility.
 random.seed(42)
 
+cache = Cache(type="disk")
+
+
+# this function takes in *args, **kwargs and returns the key you want to use for caching
+def custom_get_cache_key(*args, **kwargs):
+    # return key to use for your cache:
+    key = kwargs.get("model", "") + str(kwargs.get("messages", "")) + str(kwargs.get("temperature", ""))
+    return key
+
+
+cache.get_cache_key = custom_get_cache_key  # set get_cache_key function for your cache
+
 # Initialize disk-based caching to avoid redundant API calls.
-litellm.cache = Cache(type="disk")
+litellm.cache = cache
 
 # Configure logging.
 os.makedirs("logs", exist_ok=True)
@@ -56,8 +69,8 @@ logging.getLogger("LiteLLM").setLevel(logging.INFO)
 # ------------------------------
 
 SOURCE_MMLU_REPO_ID = "cais/mmlu"
-TARGET_REPO_ID = "tajik-evals/MMLU-dev"
-BATCH_SIZE = 50  # Number of items to process per batch.
+TARGET_REPO_ID = "tajik-evals/MMLU"
+BATCH_SIZE = 500  # Number of items to process per batch.
 LLM_TRACING = os.getenv("LLM_TRACING", "false").lower() == "true"
 assert os.environ.get("OPENROUTER_API_KEY"), "OPENROUTER_API_KEY environment variable is not set"
 
@@ -113,6 +126,10 @@ class TranslationStats:
         self.choice_mismatches = 0
         self.total_batches = 0
         self.failed_batches = 0
+        # Merge statistics:
+        self.replaced = 0
+        self.appended = 0
+        self.kept = 0
 
     def log(self) -> None:
         logger.info("======== Translation Statistics ========")
@@ -124,7 +141,72 @@ class TranslationStats:
         logger.info(f"Choice mismatches: {self.choice_mismatches}")
         logger.info(f"Total batches processed: {self.total_batches}")
         logger.info(f"Failed batches: {self.failed_batches}")
-        logger.info("========================================")
+        logger.info("======== Merge Statistics =========")
+        logger.info(f"Replaced examples: {self.replaced}")
+        logger.info(f"Appended examples: {self.appended}")
+        logger.info(f"Kept unchanged examples: {self.kept}")
+        logger.info("=====================================")
+
+
+# ------------------------------
+# Hash Function and Merge Helper
+# ------------------------------
+
+
+def hash_example(example: dict) -> str:
+    """
+    Compute a hash key for an example using its original columns.
+    """
+    question_hash = str(example["question"])
+    subject_hash = str(example["subject"])
+    choices_hash = str(example["choices"])
+    answer_hash = str(example["answer"])
+    return "<<>>".join([question_hash, subject_hash, choices_hash, answer_hash])
+
+
+def merge_datasets(new_ds: Dataset, target_ds: Optional[Dataset], stats: TranslationStats) -> Dataset:
+    """
+    Merge the new (translated) dataset with the target dataset.
+    - Replace examples in the target dataset if a matching hash is found and the new translation is valid.
+    - Append new examples (with valid translations) that are not present in the target dataset.
+    - Retain target examples when new translation is missing.
+    """
+    # If target dataset is empty or None, return the new dataset
+    if target_ds is None or len(target_ds) == 0:
+        return new_ds
+
+    target_ds = copy.deepcopy(target_ds)
+    target_dict = {hash_example(ex): i for i, ex in enumerate(target_ds)}
+
+    to_replace = []
+    to_append = []
+
+    for ex in tqdm(new_ds):
+        key = hash_example(ex)
+        new_valid = ex.get("question_tj") is not None and ex.get("choices_tj") is not None
+
+        if key in target_dict:
+            if new_valid:
+                to_replace.append((target_dict[key], ex))
+                stats.replaced += 1
+            else:
+                stats.kept += 1
+        elif new_valid:
+            to_append.append(ex)
+            stats.appended += 1
+
+    # Batch replace
+    for idx, ex in to_replace:
+        target_ds[idx].update(ex)
+
+    # Batch append
+    if to_append:
+        append_ds = Dataset.from_list(
+            to_append, features=target_ds.features, info=target_ds.info, split=target_ds.split
+        )
+        target_ds = concatenate_datasets([target_ds, append_ds], info=target_ds.info, split=target_ds.split)
+
+    return target_ds
 
 
 # ------------------------------
@@ -314,6 +396,8 @@ def translate_dataset(dataset: Dataset, stats: TranslationStats) -> List[dict]:
                 messages=batch_messages,
                 temperature=0,
                 max_tokens=max_tokens,
+                max_workers=BATCH_SIZE,
+                request_timeout=300,
             )
         except Exception as e:
             logger.warning(f"Batch {batch_index + 1} failed with error: {e}")
@@ -406,25 +490,55 @@ def main(limit: Optional[int] = None, splits: Optional[List[str]] = None) -> Non
 
     logger.info("Creating new dataset with translated columns...")
 
-    # --- Push to Hugging Face Hub ---
-    logger.info("Pushing translated dataset to Hugging Face Hub...")
+    # ------------------------------
+    # Merge with Target Repository Dataset
+    # ------------------------------
+    # Load full target repository
     try:
-        dataset_dict.push_to_hub(
-            TARGET_REPO_ID,
-            commit_message=f"Translate to Tajik. Splits: {splits}, Total items: {global_stats.total_items}",
-            commit_description=f"Translate to Tajik. Splits: {splits}\n"
-            f"Total items: {global_stats.total_items}\n"
-            f"Successes: {global_stats.successes}\n"
-            f"Failures: {global_stats.failures}\n"
-            f"Empty responses: {global_stats.empty_responses}\n"
-            f"Parse errors: {global_stats.parse_errors}\n"
-            f"Choice mismatches: {global_stats.choice_mismatches}\n"
-            f"Total batches: {global_stats.total_batches}\n"
-            f"Failed batches: {global_stats.failed_batches}",
-        )
-        logger.info("Dataset successfully pushed to Hugging Face Hub with translation statistics.")
+        logger.info(f"Attempting to load existing target dataset from {TARGET_REPO_ID} ...")
+        target_dataset_dict = load_dataset(TARGET_REPO_ID)
+        logger.info(f"Loaded existing target dataset.")
     except Exception as e:
-        logger.error(f"Failed to push dataset to hub: {e}")
+        logger.info(f"Target dataset not found. Treating as empty. Error: {e}")
+        target_dataset_dict = dataset_dict.copy()
+        target_dataset_dict.clear()
+
+    merged_dataset_dict: DatasetDict = DatasetDict()
+    all_splits = set(dataset_dict.keys()) | set(target_dataset_dict.keys())
+
+    for split in all_splits:
+        logger.info(f"Merging {split} split...")
+        new_ds = dataset_dict.get(split, Dataset.from_dict({}))
+        target_ds = target_dataset_dict.get(split, None)
+
+        # Merge new data with target data
+        merged_ds = merge_datasets(new_ds, target_ds, global_stats)
+        # Sort the merged dataset by subject
+        merged_ds = merged_ds.sort("subject")
+        merged_dataset_dict[split] = merged_ds
+
+    # ------------------------------
+    # Push to Hugging Face Hub
+    # ------------------------------
+    commit_message = (
+        f"Merge translation results. Splits: {splits}, Total items processed: {global_stats.total_items}. "
+        f"Replaced: {global_stats.replaced}, Appended: {global_stats.appended}, Kept unchanged: {global_stats.kept}. "
+        f"Successes: {global_stats.successes}, Failures: {global_stats.failures}, "
+        f"Empty responses: {global_stats.empty_responses}, Parse errors: {global_stats.parse_errors}, "
+        f"Choice mismatches: {global_stats.choice_mismatches}, Total batches: {global_stats.total_batches}, "
+        f"Failed batches: {global_stats.failed_batches}"
+    )
+
+    logger.info("Pushing merged dataset to Hugging Face Hub...")
+    try:
+        merged_dataset_dict.push_to_hub(
+            TARGET_REPO_ID,
+            commit_message=commit_message,
+            commit_description=commit_message,
+        )
+        logger.info("Merged dataset successfully pushed to Hugging Face Hub with merge and translation statistics.")
+    except Exception as e:
+        logger.error(f"Failed to push merged dataset to hub: {e}")
 
     # Log aggregated statistics.
     global_stats.log()
